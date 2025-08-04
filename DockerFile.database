@@ -1,0 +1,17 @@
+FROM postgres:15-alpine
+
+# Set environment variables for PostgreSQL
+ENV POSTGRES_DB=taes2_db
+ENV POSTGRES_USER=taes2_db_user
+ENV POSTGRES_PASSWORD=postgres_admin_pass
+ENV POSTGRES_INITDB_ARGS="--encoding=UTF8 --locale=C"
+
+# Copy initialization script
+COPY ./src/database/init-db.sql /docker-entrypoint-initdb.d/
+
+# Expose PostgreSQL port
+EXPOSE 5432
+
+# Use the default PostgreSQL entrypoint and command
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["postgres"]

@@ -48,6 +48,46 @@ coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
+
+# TAES 2 Specific
+.env
+venv/
+logs/
+uploads/
+data/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker
+.docker/
+
+# Test files
+test_files/
+sample_data/
 .pytest_cache/
 cover/
 

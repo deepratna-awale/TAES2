@@ -1,0 +1,89 @@
+services:
+  database:
+    build:
+      context: .
+      dockerfile: DockerFile.database
+    container_name: taes2-database
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: taes2_db
+      POSTGRES_USER: taes2_db_user
+      POSTGRES_PASSWORD: postgres_admin_pass
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./src/database/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taes2_db_user -d taes2_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - taes2-network
+
+  app:
+    build:
+      context: .
+      dockerfile: DockerFile.taes
+    container_name: taes2-app
+    ports:
+      - "7860:7860"
+    environment:
+      DATABASE_URL: postgresql://taes2_db_user:postgres_admin_pass@database:5432/taes2_db
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: 1
+      TAES_INTERFACE_MODE: main 
+      TAES_SERVER_NAME: 0.0.0.0
+      TAES_SERVER_PORT: 7860
+      TAES_DEBUG: "false"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:7860 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - taes2-network
+
+  # Optional: pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: taes2-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    ports:
+      - "8080:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - taes2-network
+    profiles:
+      - admin
+
+volumes:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  taes2-network:
+    driver: bridge
