@@ -1,6 +1,6 @@
-# # T.E.A.S 2 - Theoretical Answer Evaluation System
+# T.E.A.S 2 - Theoretical Answer Evaluation System
 
-An advanced AI-powered system for automatically evaluating theoretical answers using LLMs and RAG technology.
+An addition to T.A.E.S: Automatically evaluate theoretical answers using SOTA LLM and RAG technology.
 
 ## Features
 
@@ -416,12 +416,8 @@ For support and questions:
 - Check the documentation
 - Review the logs in the `logs/` directory
 
-## Roadmap
+## References
+T.A.E.S: https://www.researchgate.net/publication/370215129_Monograph_on_Theoretical_Answer_Evaluation_System
 
-- [ ] Advanced analytics dashboard
-- [ ] Export functionality (PDF reports, Excel)
-- [ ] Integration with learning management systems
-- [ ] Mobile-responsive interface
-- [ ] Advanced plagiarism detection
-- [ ] Multi-language support
-T.E.A.S 2, a Theoretical Answer Evaluation System to evaluate answers based on RAG and GPT.
+
+
