@@ -10,6 +10,7 @@ from src.database.init_db import get_db
 from src.llm.manager import llm_manager
 from src.evaluation.engine import evaluation_engine
 from src.parsing.document_parser import document_parser
+from src.rag.store import reference_store
 from src.ui.common import MODEL_CHOICES, DEFAULT_MODEL, read_upload, refresh_question_banks_update
 
 def create_main_interface():
@@ -74,7 +75,7 @@ def create_main_interface():
                 
                 question_file = gr.File(
                     label="Upload Question Bank",
-                    file_types=[".pdf", ".docx", ".txt"],
+                    file_types=[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"],
                     file_count="single"
                 )
                 
@@ -85,12 +86,18 @@ def create_main_interface():
                         value=DEFAULT_MODEL
                     )
                 
+                question_handwritten = gr.Checkbox(
+                    label="Handwritten or scanned question paper",
+                    value=False,
+                    info="Images and scanned PDFs are detected automatically"
+                )
+                
                 process_questions_btn = gr.Button("Process Question Bank", variant="primary")
                 question_processing_output = gr.JSON(label="Processed Questions Preview")
                 save_question_bank_btn = gr.Button("Save Question Bank", variant="secondary")
                 question_bank_status = gr.Textbox(label="Status", interactive=False)
                 
-                def process_question_bank(name, description, file, total_marks_val, distribution, per_q_marks, model):
+                def process_question_bank(name, description, file, total_marks_val, distribution, per_q_marks, model, handwritten):
                     if not file or not name:
                         return None, "Please provide question bank name and file"
                     
@@ -99,7 +106,9 @@ def create_main_interface():
                         file_content, file_name = read_upload(file)
                         
                         # Parse document
-                        text_content = document_parser.parse_document(file_content, file_name)
+                        text_content = document_parser.parse_document(
+                            file_content, file_name, handwritten=handwritten, model=model
+                        )
                         if not text_content.strip():
                             return None, "No text could be extracted from the question paper"
                         
@@ -152,7 +161,8 @@ def create_main_interface():
                     process_question_bank,
                     inputs=[
                         question_bank_name, question_bank_description, question_file,
-                        total_marks, mark_distribution, per_question_marks, model_selection
+                        total_marks, mark_distribution, per_question_marks, model_selection,
+                        question_handwritten
                     ],
                     outputs=[question_processing_output, question_bank_status]
                 )
@@ -166,6 +176,136 @@ def create_main_interface():
                     outputs=[question_bank_status]
                 )
             
+            # Tab: Reference Material (RAG)
+            with gr.TabItem("📖 Reference Material"):
+                gr.Markdown("## Reference Material")
+                gr.Markdown(
+                    "Attach an **answer key** (model answers numbered like the paper) or **course material** "
+                    "(notes, textbook chapters) to a question bank. During evaluation each question is graded "
+                    "against its model answer and the most relevant passages of the course material."
+                )
+                
+                ref_question_bank_dropdown = gr.Dropdown(
+                    label="Question Bank",
+                    allow_custom_value=True,
+                    choices=[],
+                    info="Reference material is attached to this question bank"
+                )
+                ref_refresh_btn = gr.Button("Refresh Question Banks")
+                
+                ref_kind = gr.Radio(
+                    label="Material Type",
+                    choices=["Answer key", "Course material"],
+                    value="Answer key"
+                )
+                ref_files = gr.File(
+                    label="Upload Reference Files",
+                    file_types=[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"],
+                    file_count="multiple"
+                )
+                with gr.Row():
+                    ref_handwritten = gr.Checkbox(label="Handwritten or scanned files", value=False)
+                    ref_model = gr.Dropdown(
+                        label="Model for transcribing scans",
+                        choices=MODEL_CHOICES,
+                        value=DEFAULT_MODEL
+                    )
+                
+                with gr.Row():
+                    add_ref_btn = gr.Button("Add Reference Material", variant="primary")
+                    clear_ref_btn = gr.Button("Remove All Reference Material", variant="stop")
+                ref_status = gr.Textbox(label="Status", interactive=False, lines=3)
+                
+                def describe_reference(db, question_bank_id):
+                    stats = reference_store.stats(db, question_bank_id)
+                    return (
+                        f"Answer key: {stats['answer_key_questions']} question(s) covered. "
+                        f"Course material: {stats['course_material_chunks']} passage(s) indexed."
+                    )
+                
+                def add_reference_material(question_bank_id, kind, files, handwritten, model):
+                    if not question_bank_id or not files:
+                        return "Please select a question bank and upload at least one file"
+                    
+                    db = None
+                    try:
+                        db = next(get_db())
+                        question_bank = db.get(QuestionBank, int(question_bank_id))
+                        if not question_bank:
+                            return f"Question bank {question_bank_id} not found"
+                        question_count = len(question_bank.questions_json.get("questions", []))
+                        
+                        texts = []
+                        for file in files:
+                            content, name = read_upload(file)
+                            text = document_parser.parse_document(content, name, handwritten=handwritten, model=model)
+                            if text.strip():
+                                texts.append((name, text))
+                        if not texts:
+                            return "No text could be extracted from the uploaded files"
+                        
+                        if kind == "Answer key":
+                            # Several files form one answer key (e.g. one page per file)
+                            combined = "\n".join(text for _, text in texts)
+                            sources = ", ".join(name for name, _ in texts)
+                            count = reference_store.add_answer_key(db, question_bank.id, combined, question_count, sources)
+                            message = f"Answer key saved with model answers for {count} of {question_count} questions."
+                        else:
+                            chunks = sum(
+                                reference_store.add_course_material(db, question_bank.id, text, name)
+                                for name, text in texts
+                            )
+                            message = f"Indexed {chunks} passage(s) from {len(texts)} file(s)."
+                        return message + "\n" + describe_reference(db, question_bank.id)
+                    except Exception as e:
+                        return f"Error adding reference material: {str(e)}"
+                    finally:
+                        if db is not None:
+                            db.close()
+                
+                def clear_reference_material(question_bank_id):
+                    if not question_bank_id:
+                        return "Please select a question bank"
+                    db = None
+                    try:
+                        db = next(get_db())
+                        removed = reference_store.clear(db, int(question_bank_id))
+                        return f"Removed {removed} reference item(s)."
+                    except Exception as e:
+                        return f"Error removing reference material: {str(e)}"
+                    finally:
+                        if db is not None:
+                            db.close()
+                
+                def show_reference_status(question_bank_id):
+                    if not question_bank_id:
+                        return ""
+                    db = None
+                    try:
+                        db = next(get_db())
+                        return describe_reference(db, int(question_bank_id))
+                    except Exception as e:
+                        return f"Error reading reference material: {str(e)}"
+                    finally:
+                        if db is not None:
+                            db.close()
+                
+                add_ref_btn.click(
+                    add_reference_material,
+                    inputs=[ref_question_bank_dropdown, ref_kind, ref_files, ref_handwritten, ref_model],
+                    outputs=[ref_status]
+                )
+                clear_ref_btn.click(
+                    clear_reference_material,
+                    inputs=[ref_question_bank_dropdown],
+                    outputs=[ref_status]
+                )
+                ref_question_bank_dropdown.change(
+                    show_reference_status,
+                    inputs=[ref_question_bank_dropdown],
+                    outputs=[ref_status]
+                )
+            
             # Tab 3: Single Answer Sheet
             with gr.TabItem("📝 Single Answer Sheet"):
                 gr.Markdown("## Evaluate Single Answer Sheet")
@@ -173,6 +313,7 @@ def create_main_interface():
                 # Question bank selection
                 question_bank_dropdown = gr.Dropdown(
                     label="Select Question Bank",
+                    allow_custom_value=True,
                     choices=[],
                     info="Choose the question bank to evaluate against"
                 )
@@ -190,7 +331,7 @@ def create_main_interface():
                 # File upload
                 single_answer_file = gr.File(
                     label="Upload Answer Sheet",
-                    file_types=[".pdf", ".docx", ".txt"],
+                    file_types=[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"],
                     file_count="single"
                 )
                 
@@ -200,11 +341,17 @@ def create_main_interface():
                     value=DEFAULT_MODEL
                 )
                 
+                single_handwritten = gr.Checkbox(
+                    label="Handwritten or scanned answer sheet",
+                    value=False,
+                    info="Transcribes the pages with the selected model before grading"
+                )
+                
                 evaluate_single_btn = gr.Button("Evaluate Answer Sheet", variant="primary")
                 single_evaluation_output = gr.JSON(label="Evaluation Results")
                 single_status = gr.Textbox(label="Status", interactive=False)
                 
-                def evaluate_single_answer(question_bank_id, file, model):
+                def evaluate_single_answer(question_bank_id, file, model, handwritten):
                     if not file or not question_bank_id:
                         return None, "Please select question bank and upload answer sheet"
                     
@@ -214,7 +361,7 @@ def create_main_interface():
                         
                         # Process answer sheet
                         result = evaluation_engine.process_single_answer_sheet(
-                            file_content, file_name, question_bank_id, model
+                            file_content, file_name, question_bank_id, model, handwritten
                         )
                         
                         if result.status == "completed":
@@ -228,7 +375,7 @@ def create_main_interface():
                 
                 evaluate_single_btn.click(
                     evaluate_single_answer,
-                    inputs=[question_bank_dropdown, single_answer_file, single_model_selection],
+                    inputs=[question_bank_dropdown, single_answer_file, single_model_selection, single_handwritten],
                     outputs=[single_evaluation_output, single_status]
                 )
             
@@ -239,6 +386,7 @@ def create_main_interface():
                 
                 batch_question_bank_dropdown = gr.Dropdown(
                     label="Select Question Bank",
+                    allow_custom_value=True,
                     choices=[],
                     info="Choose the question bank to evaluate against"
                 )
@@ -251,7 +399,7 @@ def create_main_interface():
                 
                 batch_answer_files = gr.File(
                     label="Upload Answer Sheets",
-                    file_types=[".pdf", ".docx", ".txt"],
+                    file_types=[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"],
                     file_count="multiple"
                 )
                 
@@ -269,11 +417,17 @@ def create_main_interface():
                     precision=0
                 )
                 
+                batch_handwritten = gr.Checkbox(
+                    label="Handwritten or scanned answer sheets",
+                    value=False,
+                    info="Transcribes the pages with the selected model before grading"
+                )
+                
                 evaluate_batch_btn = gr.Button("Start Batch Evaluation", variant="primary")
                 batch_evaluation_output = gr.JSON(label="Batch Results Summary")
                 batch_status = gr.Textbox(label="Status", interactive=False)
                 
-                def evaluate_batch_answers(question_bank_id, files, model, batch_size):
+                def evaluate_batch_answers(question_bank_id, files, model, batch_size, handwritten):
                     if not files or not question_bank_id:
                         return None, "Please select question bank and upload answer sheets"
                     
@@ -288,7 +442,7 @@ def create_main_interface():
                         
                         # Process batch
                         results = evaluation_engine.process_batch_answer_sheets(
-                            file_data, question_bank_id, model, int(batch_size)
+                            file_data, question_bank_id, model, int(batch_size), handwritten
                         )
                         
                         # Create summary
@@ -311,7 +465,7 @@ def create_main_interface():
                 
                 evaluate_batch_btn.click(
                     evaluate_batch_answers,
-                    inputs=[batch_question_bank_dropdown, batch_answer_files, batch_model_selection, batch_size_input],
+                    inputs=[batch_question_bank_dropdown, batch_answer_files, batch_model_selection, batch_size_input, batch_handwritten],
                     outputs=[batch_evaluation_output, batch_status]
                 )
             
@@ -385,5 +539,7 @@ def create_main_interface():
         
         interface.load(refresh_question_banks, outputs=[question_bank_dropdown])
         interface.load(refresh_question_banks, outputs=[batch_question_bank_dropdown])
+        interface.load(refresh_question_banks, outputs=[ref_question_bank_dropdown])
+        ref_refresh_btn.click(refresh_question_banks, outputs=[ref_question_bank_dropdown])
     
     return interface

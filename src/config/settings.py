@@ -67,6 +67,17 @@ class Settings:
     DEFAULT_MAX_TOKENS: int = int(os.getenv("DEFAULT_MAX_TOKENS", "2000"))
     MODEL_CHOICES: List[str] = _model_choices(DEFAULT_MODEL)
     
+    # Retrieval (RAG) over reference material. EMBEDDING_MODEL=none uses keyword search only
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "3"))
+    RAG_CHUNK_WORDS: int = int(os.getenv("RAG_CHUNK_WORDS", "180"))
+    
+    # Handwriting / scanned documents are transcribed by a vision-capable model.
+    # Empty VISION_MODEL means "use the model selected for grading".
+    VISION_MODEL: str = os.getenv("VISION_MODEL", "")
+    MAX_OCR_PAGES: int = int(os.getenv("MAX_OCR_PAGES", "20"))
+    OCR_RESOLUTION: int = int(os.getenv("OCR_RESOLUTION", "200"))
+    
     # Application settings
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "32"))
     MAX_UPLOAD_SIZE: int = int(os.getenv("MAX_UPLOAD_SIZE", "100"))
@@ -74,7 +85,7 @@ class Settings:
     
     # File upload settings
     UPLOAD_FOLDER: str = "uploads"
-    ALLOWED_EXTENSIONS: set = {".pdf", ".docx", ".txt"}
+    ALLOWED_EXTENSIONS: set = {".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
     MAX_FILE_SIZE_MB: int = 50
     
     # Logging settings
