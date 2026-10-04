@@ -11,6 +11,8 @@ An addition to T.A.E.S: Automatically evaluate theoretical answers using SOTA LL
 - **Question Bank Management**: Upload and parse question papers from PDF/DOCX files
 - **Batch Processing**: Evaluate up to 100 answer sheets simultaneously
 - **Smart Answer Detection**: Automatically detects and maps answer numbers
+- **Reference-Guided Grading (RAG)**: Attach an answer key and course material to a question bank; each answer is graded against its model answer and the most relevant passages
+- **Handwriting Support**: Photos, scans and handwritten PDFs are transcribed by a vision-capable model before grading
 - **Detailed Feedback**: Provides specific remarks only when marks are deducted
 
 ### 📊 Marking System
@@ -27,7 +29,7 @@ An addition to T.A.E.S: Automatically evaluate theoretical answers using SOTA LL
 ### 🗄️ Database & Storage
 - **PostgreSQL Integration**: Robust database with proper relationships
 - **Student Management**: Track student information and evaluation history
-- **Vector Storage**: Built-in vector store for advanced RAG capabilities
+- **Vector Storage**: Embeddings of reference material stored alongside the evaluations, with keyword search as a fallback
 - **Evaluation History**: Complete audit trail of all evaluations
 
 ## Installation
@@ -183,23 +185,30 @@ export TAES_INTERFACE_MODE=simple
   - **Uniform Distribution**: Equal marks for all questions
 
 3. **Upload Question Bank**
-- Upload your question paper (PDF/DOCX format)
+- Upload your question paper (PDF, DOCX, TXT, or a scan/photo)
 - The system will automatically parse questions and sub-questions
 - Review the extracted questions and save the question bank
 
-4. **Evaluate Answer Sheets**
+4. **Add Reference Material (optional, Main Interface)**
+- In the **Reference Material** tab pick the question bank
+- Upload an **answer key** with model answers numbered like the paper (`1.`, `Q1.`, `Ans 1)` ...). Each answer is matched to its question.
+- Upload **course material** such as notes or textbook chapters. It is split into passages and indexed; during grading the passages most relevant to each question are given to the model.
+- Reference files can be scans or handwritten too
+
+5. **Evaluate Answer Sheets**
 
 #### Single Answer Sheet (All Interfaces)
 - Select a question bank
 - Upload a student's answer sheet
-- Get instant evaluation results with detailed feedback
+- Tick **Handwritten or scanned** for handwritten sheets (images and image-only PDFs are detected automatically)
+- Get instant evaluation results with detailed feedback; each result shows whether reference material was used
 
 #### Batch Processing (Main Interface Only)
 - Upload up to 100 answer sheets
 - Process them in configurable batch sizes
 - View comprehensive results and analytics
 
-5. **View Results & Analytics**
+6. **View Results & Analytics**
 - Search for specific students
 - View evaluation history
 - Analyze performance trends
@@ -340,7 +349,10 @@ TAES2/
 │   ├── llm/
 │   │   └── manager.py             # LLM integration manager
 │   ├── parsing/
-│   │   └── document_parser.py     # Document parsing utilities
+│   │   ├── document_parser.py     # Document parsing utilities
+│   │   └── ocr.py                 # Handwriting / scan transcription
+│   ├── rag/
+│   │   └── store.py               # Reference material indexing and retrieval
 │   ├── evaluation/
 │   │   └── engine.py              # Main evaluation engine
 │   ├── ui/
@@ -362,10 +374,29 @@ TAES2/
 
 ## Supported File Formats
 
-- **Question Papers**: PDF, DOCX, TXT
-- **Answer Sheets**: PDF, DOCX, TXT
+- **Question Papers**: PDF, DOCX, TXT, PNG, JPG, WEBP, TIFF
+- **Answer Sheets**: PDF, DOCX, TXT, PNG, JPG, WEBP, TIFF
+- **Reference Material**: same as above
 
-Scanned (image only) PDFs and legacy `.doc` files are not supported.
+Images and scanned or handwritten PDFs are transcribed page by page with a vision-capable model (`VISION_MODEL`, or the model selected for grading). Legacy `.doc` files are not supported.
+
+## Handwriting and Scans
+
+Handwritten pages are sent to a vision-capable LLM (for example `gpt-4o-mini`, `gpt-4o`, Claude or Gemini models) with instructions to transcribe exactly, keep question numbers on their own lines, and mark unreadable words as `[illegible]`. The transcription then goes through the same answer detection and grading as typed sheets.
+
+- `VISION_MODEL`: model used for transcription (default: the model selected for grading)
+- `MAX_OCR_PAGES`: pages transcribed per document (default 20)
+- `OCR_RESOLUTION`: DPI used to render PDF pages (default 200)
+
+Tips: photograph pages flat and well lit, one page per image; ask students to start each answer with its question number.
+
+## Reference Material (RAG)
+
+- `EMBEDDING_MODEL`: LiteLLM embedding model (default `text-embedding-3-small`; e.g. `gemini/text-embedding-004`, `ollama/nomic-embed-text`). Set to `none` to use keyword (BM25) search only. If embedding fails, retrieval falls back to keyword search automatically.
+- `RAG_TOP_K`: passages of course material per question (default 3)
+- `RAG_CHUNK_WORDS`: passage size in words (default 180)
+
+Reference material is stored per question bank in the `vector_store` table. Re-uploading an answer key replaces the previous one; course material accumulates until you remove it.
 
 ## Docker Deployment
 
@@ -408,7 +439,7 @@ TEST_DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@localhost:5432/taes2_db
 - **students**: Student information and contact details
 - **question_banks**: Question papers and marking schemes
 - **evaluations**: Evaluation results and detailed feedback
-- **vector_store**: Vector embeddings for RAG functionality
+- **vector_store**: Answer keys and course material passages with their embeddings
 
 ## API Integration
 

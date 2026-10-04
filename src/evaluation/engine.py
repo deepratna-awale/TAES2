@@ -7,6 +7,7 @@ import re
 from typing import Dict, List, Any, Optional, Tuple
 from src.llm.manager import llm_manager, EvaluationResult
 from src.parsing.document_parser import document_parser
+from src.rag.store import reference_store
 from src.database.models import Evaluation, Student, QuestionBank
 from src.database.init_db import get_db
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ class QuestionResult(BaseModel):
     percentage: float = Field(..., ge=0, le=100, description="Percentage score")
     justification: str = Field(..., description="Evaluation justification")
     remarks: str = Field(default="", description="Specific remarks")
+    reference_used: bool = Field(default=False, description="Whether reference material guided the grading")
 
 
 def answer_key(question_id: Any, position: int) -> str:
@@ -78,7 +80,8 @@ class EvaluationEngine:
         file_content: bytes,
         filename: str,
         question_bank_id: int,
-        model_name: Optional[str] = None
+        model_name: Optional[str] = None,
+        handwritten: bool = False
     ) -> ProcessingResult:
         """Process a single answer sheet"""
         
@@ -86,7 +89,9 @@ class EvaluationEngine:
         filename = os.path.basename(filename)
         try:
             # Parse document
-            text_content: str = self.document_parser.parse_document(file_content, filename)
+            text_content: str = self.document_parser.parse_document(
+                file_content, filename, handwritten=handwritten, model=model_name
+            )
             
             # Get question bank from database
             db = next(get_db())
@@ -94,7 +99,7 @@ class EvaluationEngine:
             if not question_bank:
                 raise ValueError(f"Question bank with ID {question_bank_id} not found")
             if not text_content.strip():
-                raise ValueError("No text could be extracted from the answer sheet (scanned PDFs are not supported)")
+                raise ValueError("No text could be extracted from the answer sheet")
             
             questions: List[Dict[str, Any]] = question_bank.questions_json["questions"]
             question_count: int = len(questions)
@@ -130,13 +135,17 @@ class EvaluationEngine:
                 total_marks_possible += question_marks
                 
                 # Get student answer
-                student_answer: str = parsed_answers.get(answer_key(question_id, position), "")
+                key: str = answer_key(question_id, position)
+                student_answer: str = parsed_answers.get(key, "")
                 
                 if student_answer.strip():
+                    reference: Optional[str] = self._reference_for(db, int(question_bank_id), key, question_text)
+                    
                     # Evaluate answer using LLM
                     evaluation: EvaluationResult = self.llm_manager.evaluate_answer(
                         question=question_text,
                         student_answer=student_answer,
+                        reference_answer=reference,
                         marks=question_marks,
                         question_type=question_type,
                         model=model_name
@@ -157,7 +166,8 @@ class EvaluationEngine:
                         total_marks=question_marks,
                         percentage=evaluation.percentage,
                         justification=evaluation.justification,
-                        remarks=evaluation.remarks
+                        remarks=evaluation.remarks,
+                        reference_used=reference is not None
                     )
                 else:
                     # No answer provided
@@ -220,12 +230,22 @@ class EvaluationEngine:
             if db is not None:
                 db.close()
     
+    @staticmethod
+    def _reference_for(db: Session, question_bank_id: int, key: str, question_text: str) -> Optional[str]:
+        """Reference material for a question; grading continues without it if retrieval fails"""
+        try:
+            return reference_store.get_reference(db, question_bank_id, key, question_text)
+        except Exception as e:
+            print(f"Reference retrieval failed for {key}: {e}")
+            return None
+    
     def process_batch_answer_sheets(
         self,
         files: List[Tuple[bytes, str]],  # List of (file_content, filename) tuples
         question_bank_id: int,
         model_name: Optional[str] = None,
-        batch_size: int = 32
+        batch_size: int = 32,
+        handwritten: bool = False
     ) -> List[ProcessingResult]:
         """Process batch of answer sheets"""
         
@@ -239,7 +259,7 @@ class EvaluationEngine:
             
             for file_content, filename in batch:
                 result = self.process_single_answer_sheet(
-                    file_content, filename, question_bank_id, model_name
+                    file_content, filename, question_bank_id, model_name, handwritten
                 )
                 results.append(result)
         

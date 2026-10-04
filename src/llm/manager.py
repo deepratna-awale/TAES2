@@ -150,7 +150,7 @@ class LLMManager:
     
     def get_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
@@ -205,6 +205,14 @@ Guidelines:
 4. If points are deducted, explain why clearly
 5. Be consistent and fair in your evaluation"""
 
+        reference_section = ""
+        if reference_answer:
+            reference_section = (
+                "Reference material provided by the teacher (use it as the marking guide; give credit "
+                "for correct points phrased differently, and do not penalise correct points it does not "
+                "mention):\n" + reference_answer + "\n"
+            )
+
         user_prompt = f"""
 Question: {question}
 Question Type: {question_type}
@@ -213,7 +221,7 @@ Total Marks: {marks}
 Student Answer:
 {student_answer}
 
-{f"Reference Answer: {reference_answer}" if reference_answer else ""}
+{reference_section}
 
 Please evaluate this answer and provide:
 1. Marks awarded (out of {marks})

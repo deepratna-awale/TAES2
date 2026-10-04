@@ -93,12 +93,31 @@ class DocumentParser:
                 continue
         return file_content.decode('latin-1')
     
-    def parse_document(self, file_content: bytes, filename: str) -> str:
-        """Parse document based on file extension"""
+    def parse_document(
+        self,
+        file_content: bytes,
+        filename: str,
+        handwritten: bool = False,
+        model: Optional[str] = None,
+    ) -> str:
+        """Parse document based on file extension.
+
+        Images are always transcribed by the vision model. PDFs are transcribed when
+        `handwritten` is set, or when they carry too little text to be anything but a scan.
+        """
+        from src.parsing.ocr import IMAGE_EXTENSIONS, transcriber
+
         file_extension: str = filename.lower().rsplit('.', 1)[-1]
         
         if file_extension == 'pdf':
-            return self.parse_pdf(file_content)
+            if handwritten:
+                return transcriber.transcribe_pdf(file_content, model)
+            text = self.parse_pdf(file_content)
+            if self._looks_scanned(file_content, text):
+                return transcriber.transcribe_pdf(file_content, model)
+            return text
+        elif file_extension in IMAGE_EXTENSIONS:
+            return transcriber.transcribe_image_file(file_content, model)
         elif file_extension == 'docx':
             return self.parse_docx(file_content)
         elif file_extension == 'txt':
@@ -107,6 +126,16 @@ class DocumentParser:
             raise ValueError("Legacy .doc files are not supported, please save the file as .docx or PDF")
         else:
             raise ValueError(f"Unsupported file format: {file_extension}")
+    
+    @staticmethod
+    def _looks_scanned(file_content: bytes, text: str, min_chars_per_page: int = 40) -> bool:
+        """A PDF with almost no extractable text per page is a scan or a photo"""
+        try:
+            with pdfplumber.open(io.BytesIO(file_content)) as pdf:
+                page_count = max(len(pdf.pages), 1)
+        except Exception:
+            page_count = 1
+        return len(text.strip()) < min_chars_per_page * page_count
     
     def extract_answers_from_text(self, text: str, question_count: int) -> Dict[str, str]:
         """Extract individual answers from parsed text"""

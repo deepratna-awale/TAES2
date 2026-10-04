@@ -22,6 +22,7 @@ def create_minimal_interface():
                 # Question bank selection
                 question_bank_dropdown = gr.Dropdown(
                     label="Select Question Bank",
+                    allow_custom_value=True,
                     choices=[],
                     info="Choose the question bank to evaluate against"
                 )
@@ -31,7 +32,7 @@ def create_minimal_interface():
                 # File upload
                 answer_file = gr.File(
                     label="Upload Answer Sheet",
-                    file_types=[".pdf", ".docx", ".txt"],
+                    file_types=[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"],
                     file_count="single"
                 )
                 
@@ -41,6 +42,8 @@ def create_minimal_interface():
                     choices=MODEL_CHOICES,
                     value=DEFAULT_MODEL
                 )
+                
+                handwritten_checkbox = gr.Checkbox(label="Handwritten or scanned sheet", value=False)
                 
                 evaluate_btn = gr.Button("📊 Evaluate", variant="primary")
             
@@ -68,7 +71,7 @@ def create_minimal_interface():
             """Refresh the question banks dropdown"""
             return refresh_question_banks_update()
         
-        def evaluate_answer(question_bank_id, file, model):
+        def evaluate_answer(question_bank_id, file, model, handwritten=False):
             """Evaluate a single answer sheet"""
             if not file or not question_bank_id:
                 return (
@@ -84,7 +87,7 @@ def create_minimal_interface():
                 
                 # Process answer sheet
                 result = evaluation_engine.process_single_answer_sheet(
-                    file_content, file_name, question_bank_id, model
+                    file_content, file_name, question_bank_id, model, handwritten
                 )
                 
                 if result.status == "completed":
@@ -140,7 +143,7 @@ def create_minimal_interface():
         
         evaluate_btn.click(
             evaluate_answer,
-            inputs=[question_bank_dropdown, answer_file, model_selection],
+            inputs=[question_bank_dropdown, answer_file, model_selection, handwritten_checkbox],
             outputs=[status_output, score_output, details_output, show_details_btn]
         )
         

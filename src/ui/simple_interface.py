@@ -34,6 +34,7 @@ def create_simple_interface():
                 with gr.Group():
                     question_bank_dropdown = gr.Dropdown(
                         label="📋 Question Bank",
+                        allow_custom_value=True,
                         choices=[],
                         info="Select the question bank for evaluation"
                     )
@@ -47,7 +48,7 @@ def create_simple_interface():
                 with gr.Group():
                     answer_file = gr.File(
                         label="📄 Answer Sheet",
-                        file_types=[".pdf", ".docx", ".txt"],
+                        file_types=[".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"],
                         file_count="single"
                     )
                 
@@ -59,6 +60,11 @@ def create_simple_interface():
                         value=DEFAULT_MODEL,
                         info="Choose the AI model for evaluation"
                     )
+                
+                handwritten_checkbox = gr.Checkbox(
+                    label="✍️ Handwritten or scanned sheet",
+                    value=False
+                )
                 
                 # Evaluation button
                 evaluate_btn = gr.Button(
@@ -120,7 +126,7 @@ def create_simple_interface():
             """Refresh the question banks dropdown"""
             return refresh_question_banks_update("{name} ({total_marks} marks)")
         
-        def evaluate_answer_sheet(question_bank_id, file, model):
+        def evaluate_answer_sheet(question_bank_id, file, model, handwritten=False):
             """Evaluate the uploaded answer sheet"""
             if not file:
                 return (
@@ -161,7 +167,7 @@ def create_simple_interface():
                 
                 # Process answer sheet
                 result = evaluation_engine.process_single_answer_sheet(
-                    file_content, file_name, question_bank_id, model
+                    file_content, file_name, question_bank_id, model, handwritten
                 )
                 
                 if result.status == "completed":
@@ -248,7 +254,7 @@ def create_simple_interface():
         
         evaluate_btn.click(
             evaluate_answer_sheet,
-            inputs=[question_bank_dropdown, answer_file, model_selection],
+            inputs=[question_bank_dropdown, answer_file, model_selection, handwritten_checkbox],
             outputs=[
                 status_output,
                 score_display,
