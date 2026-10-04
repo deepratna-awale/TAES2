@@ -138,14 +138,9 @@ show_connection_info() {
     echo "   URL: http://localhost:7860"
     echo ""
     echo "🔗 Database Connection:"
-    echo "   Host: localhost"
-    echo "   Port: 5432"
-    echo "   Database: taes2_db"
-    echo "   Username: taes2_db_user"
-    echo "   Password: postgres_admin_pass"
-    echo ""
-    echo "📊 Database URL:"
-    echo "   postgresql://taes2_db_user:postgres_admin_pass@localhost:5432/taes2_db"
+    echo "   Host: localhost (bound to 127.0.0.1)"
+    echo "   Port: ${POSTGRES_PORT:-5432}"
+    echo "   Credentials: POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD in .env"
     echo ""
     echo "🛠️  Management Commands:"
     echo "   • Start full stack: $0 start"
@@ -198,8 +193,7 @@ case "${1:-start}" in
         COMPOSE_CMD=$(get_compose_cmd)
         $COMPOSE_CMD --profile admin up -d pgadmin
         echo -e "${GREEN}🌐 pgAdmin available at: http://localhost:8080${NC}"
-        echo -e "${GREEN}📧 Email: admin@example.com${NC}"
-        echo -e "${GREEN}🔑 Password: admin123${NC}"
+        echo -e "${GREEN}🔑 Login: PGADMIN_EMAIL / PGADMIN_PASSWORD from .env${NC}"
         ;;
     *)
         echo "Usage: $0 {start|database|stop|restart|logs|status|admin}"

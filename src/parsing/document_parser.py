@@ -4,8 +4,9 @@ Document parsing utilities for PDF and DOCX files
 
 import re
 import io
+import os
 from typing import Dict, List, Optional, Set, Match
-import PyPDF2
+import pypdf
 import pdfplumber
 from docx import Document
 from pydantic import BaseModel, Field
@@ -51,9 +52,9 @@ class DocumentParser:
                 if text_content:
                     return '\n'.join(text_content)
             
-            # Fallback to PyPDF2
+            # Fallback to pypdf
             pdf_file = io.BytesIO(file_content)
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            pdf_reader = pypdf.PdfReader(pdf_file)
             text_content = []
             
             for page in pdf_reader.pages:
@@ -83,14 +84,27 @@ class DocumentParser:
             print(f"Error parsing DOCX: {e}")
             raise
     
+    def parse_txt(self, file_content: bytes) -> str:
+        """Decode a plain text file"""
+        for encoding in ('utf-8-sig', 'utf-16'):
+            try:
+                return file_content.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return file_content.decode('latin-1')
+    
     def parse_document(self, file_content: bytes, filename: str) -> str:
         """Parse document based on file extension"""
-        file_extension: str = filename.lower().split('.')[-1]
+        file_extension: str = filename.lower().rsplit('.', 1)[-1]
         
         if file_extension == 'pdf':
             return self.parse_pdf(file_content)
-        elif file_extension in ['docx', 'doc']:
+        elif file_extension == 'docx':
             return self.parse_docx(file_content)
+        elif file_extension == 'txt':
+            return self.parse_txt(file_content)
+        elif file_extension == 'doc':
+            raise ValueError("Legacy .doc files are not supported, please save the file as .docx or PDF")
         else:
             raise ValueError(f"Unsupported file format: {file_extension}")
     
@@ -141,42 +155,39 @@ class DocumentParser:
         return complete_answers
     
     def _fill_missing_answers(self, answers: Dict[str, str], expected_count: int) -> Dict[str, str]:
-        """Fill missing answer numbers by guessing from existing pattern"""
-        # Extract existing question numbers
-        existing_nums: Set[int] = set()
-        for key in answers.keys():
-            if key.startswith('Q'):
-                try:
-                    num: int = int(key[1:])
-                    existing_nums.add(num)
-                except ValueError:
-                    continue
+        """Return Q1..Qn, filling gaps with answers numbered outside that range.
+
+        Students sometimes number answers differently from the paper (e.g. 0-based or
+        skipping numbers), so leftover out-of-range answers are mapped onto missing
+        slots in order. An answer is never used for two questions.
+        """
+        def number_of(key: str) -> Optional[int]:
+            try:
+                return int(key[1:]) if key.startswith('Q') else None
+            except ValueError:
+                return None
         
-        # Create complete answer set
+        leftovers: List[str] = [
+            content for key, content in sorted(answers.items(), key=lambda kv: number_of(kv[0]) or 0)
+            if (number_of(key) is None or not 1 <= number_of(key) <= expected_count) and content
+        ]
+        
         complete_answers: Dict[str, str] = {}
-        
         for i in range(1, expected_count + 1):
             question_key: str = f"Q{i}"
-            
-            if i in existing_nums:
-                # Use existing answer
-                complete_answers[question_key] = answers.get(question_key, "")
+            if answers.get(question_key):
+                complete_answers[question_key] = answers[question_key]
             else:
-                # Assign unmatched content or empty
-                unassigned_content: Optional[str] = None
-                for _, content in answers.items():
-                    if content not in complete_answers.values():
-                        unassigned_content = content
-                        break
-                
-                complete_answers[question_key] = unassigned_content or ""
+                complete_answers[question_key] = leftovers.pop(0) if leftovers else ""
         
         return complete_answers
     
     def extract_student_name_from_filename(self, filename: str) -> str:
         """Extract student name from filename"""
+        # Uploads arrive as full temp paths, keep only the file name
+        name: str = os.path.basename(filename)
         # Remove file extension
-        name: str = filename.rsplit('.', 1)[0]
+        name = name.rsplit('.', 1)[0]
         
         # Clean up common patterns
         name = re.sub(r'[_\-]+', ' ', name)  # Replace underscores/hyphens with spaces

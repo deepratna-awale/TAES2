@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: taes2_db
+          POSTGRES_USER: taes2_db_user
+          # Throwaway CI database, reachable only from this job
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U taes2_db_user -d taes2_db"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Tests (SQLite)
+        run: pytest -q tests
+      - name: Tests (PostgreSQL)
+        run: pytest -q tests
+        env:
+          TEST_DATABASE_URL: postgresql://taes2_db_user@localhost:5432/taes2_db
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t taes2-app:latest .
+      - name: Smoke test with Postgres
+        run: |
+          echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" > .env
+          docker compose up -d --no-build
+          for i in $(seq 1 40); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' taes2-app)
+            echo "app health: $status"
+            [ "$status" = healthy ] && exit 0
+            sleep 5
+          done
+          docker compose logs app
+          exit 1

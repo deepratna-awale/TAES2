@@ -2,17 +2,30 @@
 Database initialization and configuration
 """
 
-import os
+import time
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
+from src.config.settings import settings
 from src.database.models import Base
 
-# Get database URL from environment
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:taes2_secure_password@localhost:5432/taes2_db")
-print(f"Using DATABASE_URL: {DATABASE_URL}")
+DATABASE_URL = settings.DATABASE_URL
 
-# Create engine
-engine = create_engine(DATABASE_URL, echo=False)
+
+def _engine_url(url: str) -> str:
+    """Pin plain postgres URLs to the psycopg (v3) driver we install, since
+    SQLAlchemy's default driver for "postgresql://" differs between versions"""
+    for prefix in ("postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
+# Never print the password
+SAFE_DATABASE_URL = make_url(DATABASE_URL).render_as_string(hide_password=True)
+
+# pool_pre_ping drops stale connections (RDS failover, idle timeouts)
+engine = create_engine(_engine_url(DATABASE_URL), echo=False, pool_pre_ping=True)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -25,20 +38,26 @@ def get_db():
     finally:
         db.close()
 
-def initialize_database():
-    """Initialize database tables"""
-    try:
-        print("Testing database connection...")
-        # Test connection first
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT 1"))
+def initialize_database(retries: int = settings.DB_CONNECT_RETRIES):
+    """Wait for the database to accept connections, then create tables"""
+    print(f"Using DATABASE_URL: {SAFE_DATABASE_URL}")
+    attempt = 1
+    while True:
+        try:
+            print("Testing database connection...")
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
             print("✅ Database connection successful!")
-        
-        print("Creating database tables...")
-        Base.metadata.create_all(bind=engine)
-        print("✅ Database tables created successfully!")
-        
-    except Exception as e:
-        print(f"❌ Error creating database tables: {e}")
-        print(f"Database URL being used: {DATABASE_URL}")
-        raise
+            break
+        except Exception as e:
+            if attempt >= retries:
+                print(f"❌ Could not connect to the database after {attempt} attempts: {e}")
+                raise
+            delay = min(2 ** attempt, 30)
+            print(f"Database not ready (attempt {attempt}/{retries}), retrying in {delay}s: {e}")
+            time.sleep(delay)
+            attempt += 1
+
+    print("Creating database tables...")
+    Base.metadata.create_all(bind=engine)
+    print("✅ Database tables created successfully!")

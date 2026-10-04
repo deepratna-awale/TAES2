@@ -146,20 +146,18 @@ def check_dependencies():
     """Check if required packages are available"""
     print("\nChecking dependencies...")
 
-    required_packages = [
-        "gradio", "python-dotenv", "litellm", 
-        "sqlalchemy", "pydantic", "pandas"
-    ]
+    # package name -> import name
+    required_packages = {
+        "gradio": "gradio", "python-dotenv": "dotenv", "litellm": "litellm",
+        "sqlalchemy": "sqlalchemy", "pydantic": "pydantic", "psycopg": "psycopg",
+        "pdfplumber": "pdfplumber", "pypdf": "pypdf", "python-docx": "docx",
+    }
 
     missing_packages = []
 
-    for package in required_packages:
+    for package, module in required_packages.items():
         try:
-            if package == 'python-dotenv':
-                __import__('dotenv')
-                print(f"✓ {package} available")
-                
-            __import__(package.replace("-", "_"))
+            __import__(module)
             print(f"✓ {package} available")
         except ImportError:
             print(f"✗ {package} missing")

@@ -1,7 +1,15 @@
-# Ignore database data
+.git
+.github
+.env
+.env.*
+!.env.example
+tests/
+docs/
 postgres_data/
-*.log
 logs/
+uploads/
+data/
+*.log
 __pycache__/
 *.pyc
 *.pyo
@@ -10,17 +18,11 @@ __pycache__/
 env/
 venv/
 .venv/
-pip-log.txt
-pip-delete-this-directory.txt
 .tox/
 .coverage
 .coverage.*
 .cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
 .pytest_cache/
+.hypothesis/
 .DS_Store
 Thumbs.db

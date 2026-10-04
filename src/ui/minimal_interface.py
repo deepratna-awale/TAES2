@@ -3,11 +3,11 @@ Minimal Gradio interface for TAES 2
 A simplified interface for basic evaluation tasks
 """
 
+import html
 import gradio as gr
 from typing import Optional
-from src.database.models import QuestionBank
-from src.database.init_db import get_db
 from src.evaluation.engine import evaluation_engine
+from src.ui.common import MODEL_CHOICES, DEFAULT_MODEL, read_upload, refresh_question_banks_update
 
 
 def create_minimal_interface():
@@ -31,20 +31,15 @@ def create_minimal_interface():
                 # File upload
                 answer_file = gr.File(
                     label="Upload Answer Sheet",
-                    file_types=[".pdf", ".docx"],
+                    file_types=[".pdf", ".docx", ".txt"],
                     file_count="single"
                 )
                 
                 # Model selection
                 model_selection = gr.Dropdown(
                     label="AI Model",
-                    choices=[
-                        "gpt-3.5-turbo",
-                        "gpt-4",
-                        "claude-3-haiku",
-                        "gemini-pro"
-                    ],
-                    value="gpt-3.5-turbo"
+                    choices=MODEL_CHOICES,
+                    value=DEFAULT_MODEL
                 )
                 
                 evaluate_btn = gr.Button("📊 Evaluate", variant="primary")
@@ -71,18 +66,7 @@ def create_minimal_interface():
         
         def refresh_question_banks():
             """Refresh the question banks dropdown"""
-            db = None
-            try:
-                db = next(get_db())
-                question_banks = db.query(QuestionBank).all()
-                choices = [(f"{qb.name} (ID: {qb.id})", qb.id) for qb in question_banks]
-                return gr.update(choices=choices)
-            except Exception as e:
-                print(f"Error refreshing question banks: {e}")
-                return gr.update(choices=[])
-            finally:
-                if db is not None:
-                    db.close()
+            return refresh_question_banks_update()
         
         def evaluate_answer(question_bank_id, file, model):
             """Evaluate a single answer sheet"""
@@ -96,12 +80,11 @@ def create_minimal_interface():
             
             try:
                 # Read file content
-                with open(file.name, 'rb') as f:
-                    file_content = f.read()
+                file_content, file_name = read_upload(file)
                 
                 # Process answer sheet
                 result = evaluation_engine.process_single_answer_sheet(
-                    file_content, file.name, question_bank_id, model
+                    file_content, file_name, question_bank_id, model
                 )
                 
                 if result.status == "completed":
@@ -113,7 +96,7 @@ def create_minimal_interface():
                             {result.total_marks_obtained}/{result.total_marks_possible} marks
                         </div>
                         <div style='font-size: 14px; opacity: 0.8; margin-top: 10px;'>
-                            Student: {result.student_name}
+                            Student: {html.escape(result.student_name)}
                         </div>
                     </div>
                     """

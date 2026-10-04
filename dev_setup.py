@@ -37,6 +37,7 @@ def create_test_files():
 
 def setup_test_database():
     """Set up test database with sample data"""
+    db = None
     try:
         # Initialize database
         initialize_database()
@@ -115,7 +116,8 @@ def setup_test_database():
         print(f"Error setting up test database: {e}")
         return None
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 def cleanup_test_files(temp_dir: str):
     """Clean up test files"""

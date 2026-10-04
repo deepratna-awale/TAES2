@@ -6,13 +6,13 @@ import os
 import sys
 from dotenv import load_dotenv
 
+# Load environment variables before any module reads its settings
+load_dotenv()
+
 from src.ui.main_interface import create_main_interface
 from src.ui.minimal_interface import create_minimal_interface
 from src.ui.simple_interface import create_simple_interface
 from src.database.init_db import initialize_database
-
-# Load environment variables
-load_dotenv()
 
 def get_interface_mode() -> str:
     """Get the interface mode from environment variable or command line argument"""
@@ -73,6 +73,14 @@ def create_gradio_app():
             """)
         return error_interface
 
+def get_auth():
+    """Basic auth credentials from TAES_AUTH_USERNAME / TAES_AUTH_PASSWORD, if set"""
+    username = os.getenv("TAES_AUTH_USERNAME")
+    password = os.getenv("TAES_AUTH_PASSWORD")
+    if username and password:
+        return [(username, password)]
+    return None
+
 def main():
     """Launch the application directly"""
     
@@ -84,10 +92,16 @@ def main():
         server_name = os.getenv("TAES_SERVER_NAME", "0.0.0.0")
         server_port = int(os.getenv("TAES_SERVER_PORT", "7860"))
         share_gradio = os.getenv("TAES_SHARE_GRADIO", "false").lower() == "true"
-        debug_mode = os.getenv("TAES_DEBUG", "true").lower() == "true"
+        debug_mode = os.getenv("TAES_DEBUG", "false").lower() == "true"
+        concurrency = int(os.getenv("TAES_CONCURRENCY_LIMIT", "4"))
+        max_file_size = f"{int(os.getenv('MAX_FILE_SIZE_MB', '50'))}mb"
+        auth = get_auth()
         
         print(f"Launching on {server_name}:{server_port}")
-        print(f"Share: {share_gradio}, Debug: {debug_mode}")
+        print(f"Share: {share_gradio}, Debug: {debug_mode}, Auth: {'on' if auth else 'off'}")
+        
+        # Evaluations call LLMs and can take minutes; queue them instead of blocking workers
+        interface.queue(default_concurrency_limit=concurrency)
         
         # Launch the application using Gradio's built-in server
         interface.launch(
@@ -96,7 +110,9 @@ def main():
             server_port=server_port,
             debug=debug_mode,
             show_error=True,
-            quiet=False
+            quiet=False,
+            auth=auth,
+            max_file_size=max_file_size,
         )
         
     except KeyboardInterrupt:
