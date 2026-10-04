@@ -3,7 +3,7 @@ Database models for TAES 2 with proper SQLAlchemy type hints
 """
 
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey, JSON, Float
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from typing import Dict, Any, List, Optional

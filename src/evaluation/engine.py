@@ -2,6 +2,8 @@
 Answer evaluation engine
 """
 
+import os
+import re
 from typing import Dict, List, Any, Optional, Tuple
 from src.llm.manager import llm_manager, EvaluationResult
 from src.parsing.document_parser import document_parser
@@ -16,8 +18,8 @@ class ProcessingResult(BaseModel):
     """Type-safe processing result"""
     evaluation_id: Optional[int] = Field(default=None, description="Database evaluation ID")
     student_name: str = Field(..., description="Name of the student")
-    total_marks_obtained: Optional[int] = Field(default=None, description="Total marks obtained")
-    total_marks_possible: Optional[int] = Field(default=None, description="Total marks possible")
+    total_marks_obtained: Optional[float] = Field(default=None, description="Total marks obtained")
+    total_marks_possible: Optional[float] = Field(default=None, description="Total marks possible")
     percentage: Optional[float] = Field(default=None, description="Final percentage score")
     evaluation_results: Optional[List[Dict[str, Any]]] = Field(default=None, description="Individual question results")
     remarks: Optional[Dict[str, str]] = Field(default=None, description="Remarks for questions with deductions")
@@ -30,11 +32,38 @@ class QuestionResult(BaseModel):
     question_id: str = Field(..., description="Question identifier")
     question_text: str = Field(..., description="Question text")
     student_answer: str = Field(..., description="Student's answer")
-    marks_awarded: int = Field(..., ge=0, description="Marks awarded")
-    total_marks: int = Field(..., gt=0, description="Total marks possible")
+    marks_awarded: float = Field(..., ge=0, description="Marks awarded")
+    total_marks: float = Field(..., gt=0, description="Total marks possible")
     percentage: float = Field(..., ge=0, le=100, description="Percentage score")
     justification: str = Field(..., description="Evaluation justification")
     remarks: str = Field(default="", description="Specific remarks")
+
+
+def answer_key(question_id: Any, position: int) -> str:
+    """Map a question id from the question bank ("Q1", "1", "Question 1") to the
+    "Q<n>" key the document parser produces"""
+    match = re.search(r"\d+", str(question_id))
+    return f"Q{match.group(0)}" if match else f"Q{position}"
+
+
+def question_with_parts(question: Dict[str, Any]) -> Tuple[str, float]:
+    """Full question text including its sub-parts, and the marks for the whole question.
+
+    Answer sheets are split by main question number only, so a question with
+    sub-parts is graded once as a whole. Grading the parts separately as well
+    would count the same marks twice.
+    """
+    text = str(question.get("text", ""))
+    sub_questions = question.get("sub_questions") or []
+    sub_total = sum(float(sq.get("marks") or 0) for sq in sub_questions)
+    marks = float(question.get("marks") or 0) or sub_total
+    if sub_questions:
+        parts = [
+            f"{sq.get('id', '')}) {sq.get('text', '')} ({sq.get('marks', '?')} marks)"
+            for sq in sub_questions
+        ]
+        text = text + "\n" + "\n".join(parts)
+    return text, marks
 
 
 class EvaluationEngine:
@@ -54,15 +83,18 @@ class EvaluationEngine:
         """Process a single answer sheet"""
         
         db: Optional[Session] = None
+        filename = os.path.basename(filename)
         try:
             # Parse document
             text_content: str = self.document_parser.parse_document(file_content, filename)
             
             # Get question bank from database
             db = next(get_db())
-            question_bank = db.get(QuestionBank, question_bank_id)
+            question_bank = db.get(QuestionBank, int(question_bank_id))
             if not question_bank:
                 raise ValueError(f"Question bank with ID {question_bank_id} not found")
+            if not text_content.strip():
+                raise ValueError("No text could be extracted from the answer sheet (scanned PDFs are not supported)")
             
             questions: List[Dict[str, Any]] = question_bank.questions_json["questions"]
             question_count: int = len(questions)
@@ -75,29 +107,30 @@ class EvaluationEngine:
             
             # Get or create student
             # Using type: ignore for SQLAlchemy column comparison typing issue
-            existing_students = db.query(Student).filter(Student.name == student_name).all()  # type: ignore
-            student = existing_students[0] if existing_students else None
+            student = db.query(Student).filter(Student.name == student_name).first()  # type: ignore
             
             if not student:
-                student = Student(name=student_name, email=f"{student_name.lower().replace(' ', '.')}@example.com")
+                student = Student(name=student_name)
                 db.add(student)
                 db.commit()
                 db.refresh(student)
             
             # Evaluate each answer
             evaluation_results: List[Dict[str, Any]] = []
-            total_marks_obtained: int = 0
-            total_marks_possible: int = 0
+            total_marks_obtained: float = 0
+            total_marks_possible: float = 0
             remarks: Dict[str, str] = {}
             
-            for question in questions:
-                question_id: str = question["id"]
-                question_text: str = question["text"]
-                question_marks: int = question["marks"]
+            for position, question in enumerate(questions, start=1):
+                question_id: str = str(question["id"])
+                question_text, question_marks = question_with_parts(question)
                 question_type: str = question.get("type", "explain")
+                if question_marks <= 0:
+                    continue
+                total_marks_possible += question_marks
                 
                 # Get student answer
-                student_answer: str = parsed_answers.get(question_id, "")
+                student_answer: str = parsed_answers.get(answer_key(question_id, position), "")
                 
                 if student_answer.strip():
                     # Evaluate answer using LLM
@@ -109,15 +142,13 @@ class EvaluationEngine:
                         model=model_name
                     )
                     
-                    marks_awarded: int = evaluation.marks_awarded
+                    marks_awarded: float = evaluation.marks_awarded
                     total_marks_obtained += marks_awarded
-                    total_marks_possible += question_marks
                     
                     # Store remarks if points were cut
                     if marks_awarded < question_marks and evaluation.remarks.strip():
                         remarks[question_id] = evaluation.remarks
                     
-                    # Store results using QuestionResult model for type safety
                     question_result = QuestionResult(
                         question_id=question_id,
                         question_text=question_text,
@@ -128,69 +159,10 @@ class EvaluationEngine:
                         justification=evaluation.justification,
                         remarks=evaluation.remarks
                     )
-                    evaluation_results.append(question_result.model_dump())
-                    
-                    # Handle sub-questions
-                    for sub_question in question.get("sub_questions", []):
-                        sub_question_id: str = sub_question["id"]
-                        sub_question_text: str = sub_question["text"]
-                        sub_question_marks: int = sub_question["marks"]
-                        sub_question_type: str = sub_question.get("type", "explain")
-                        
-                        # Get student answer for sub-question
-                        sub_student_answer: str = parsed_answers.get(sub_question_id, "")
-                        
-                        if sub_student_answer.strip():
-                            sub_evaluation: EvaluationResult = self.llm_manager.evaluate_answer(
-                                question=sub_question_text,
-                                student_answer=sub_student_answer,
-                                marks=sub_question_marks,
-                                question_type=sub_question_type,
-                                model=model_name
-                            )
-                            
-                            sub_marks_awarded: int = sub_evaluation.marks_awarded
-                            total_marks_obtained += sub_marks_awarded
-                            total_marks_possible += sub_question_marks
-                            
-                            # Store remarks if points were cut
-                            if sub_marks_awarded < sub_question_marks and sub_evaluation.remarks.strip():
-                                remarks[sub_question_id] = sub_evaluation.remarks
-                            
-                            # Store results using QuestionResult model for type safety
-                            sub_question_result = QuestionResult(
-                                question_id=sub_question_id,
-                                question_text=sub_question_text,
-                                student_answer=sub_student_answer,
-                                marks_awarded=sub_marks_awarded,
-                                total_marks=sub_question_marks,
-                                percentage=sub_evaluation.percentage,
-                                justification=sub_evaluation.justification,
-                                remarks=sub_evaluation.remarks
-                            )
-                            evaluation_results.append(sub_question_result.model_dump())
-                        else:
-                            # No answer provided for sub-question
-                            total_marks_possible += sub_question_marks
-                            remarks[sub_question_id] = "No answer provided"
-                            
-                            no_answer_result = QuestionResult(
-                                question_id=sub_question_id,
-                                question_text=sub_question_text,
-                                student_answer="",
-                                marks_awarded=0,
-                                total_marks=sub_question_marks,
-                                percentage=0,
-                                justification="No answer provided",
-                                remarks="No answer provided"
-                            )
-                            evaluation_results.append(no_answer_result.model_dump())
                 else:
-                    # No answer provided for main question
-                    total_marks_possible += question_marks
+                    # No answer provided
                     remarks[question_id] = "No answer provided"
-                    
-                    no_answer_result = QuestionResult(
+                    question_result = QuestionResult(
                         question_id=question_id,
                         question_text=question_text,
                         student_answer="",
@@ -200,7 +172,7 @@ class EvaluationEngine:
                         justification="No answer provided",
                         remarks="No answer provided"
                     )
-                    evaluation_results.append(no_answer_result.model_dump())
+                evaluation_results.append(question_result.model_dump())
             
             # Calculate final percentage
             final_percentage: float = (total_marks_obtained / total_marks_possible) * 100 if total_marks_possible > 0 else 0
@@ -208,7 +180,7 @@ class EvaluationEngine:
             # Save evaluation to database
             evaluation = Evaluation(
                 student_id=student.id,
-                question_bank_id=question_bank_id,
+                question_bank_id=int(question_bank_id),
                 total_marks_obtained=total_marks_obtained,
                 total_marks_possible=total_marks_possible,
                 percentage=final_percentage,

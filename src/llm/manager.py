@@ -3,13 +3,43 @@ LLM Integration using LiteLLM for multiple model support
 """
 
 import os
+import re
 import json
 from typing import Dict, List, Optional, Any 
 from litellm import completion
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, field_validator, ValidationInfo
+from pydantic import BaseModel, Field, field_validator, model_validator, ValidationInfo
 
 load_dotenv()
+
+VALID_QUESTION_TYPES = {'explain', 'define', 'short', 'long', 'calculate', 'analyze', 'solve', 'prove'}
+
+
+def normalize_question_type(value: Any) -> str:
+    """Map whatever the LLM returned to a known question type, defaulting to 'explain'"""
+    text = str(value or "").strip().lower()
+    for candidate in re.split(r"[|/,\s]+", text):
+        if candidate in VALID_QUESTION_TYPES:
+            return candidate
+    return "explain"
+
+
+def extract_json(response: str) -> Dict[str, Any]:
+    """Parse a JSON object out of an LLM response.
+
+    Models often wrap JSON in markdown fences or add a sentence around it.
+    """
+    text = (response or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
 
 
 class LLMMessage(BaseModel):
@@ -28,76 +58,78 @@ class LLMMessage(BaseModel):
 
 class EvaluationResult(BaseModel):
     """Type-safe evaluation result from LLM"""
-    marks_awarded: int = Field(..., ge=0, description="Marks awarded to the answer")
-    total_marks: int = Field(..., gt=0, description="Total marks possible")
-    percentage: float = Field(..., ge=0, le=100, description="Percentage score")
-    justification: str = Field(..., description="Brief explanation of the evaluation")
+    marks_awarded: float = Field(..., ge=0, description="Marks awarded to the answer")
+    total_marks: float = Field(..., gt=0, description="Total marks possible")
+    percentage: float = Field(default=0, ge=0, le=100, description="Percentage score")
+    justification: str = Field(default="", description="Brief explanation of the evaluation")
     remarks: str = Field(default="", description="Specific feedback if points were deducted")
     
-    @field_validator('marks_awarded')
+    @model_validator(mode="before")
     @classmethod
-    def validate_marks_awarded(cls, v: int, info: ValidationInfo) -> int:
-        if hasattr(info, 'data') and info.data and 'total_marks' in info.data:
-            total = info.data['total_marks']
-            if isinstance(total, int) and v > total:
-                raise ValueError("Marks awarded cannot exceed total marks")
-        return v
+    def clamp_and_compute(cls, data: Any) -> Any:
+        """Keep marks within [0, total] and derive the percentage from them"""
+        if isinstance(data, dict):
+            data = dict(data)
+            try:
+                total = float(data.get("total_marks") or 0)
+                awarded = float(data.get("marks_awarded") or 0)
+            except (TypeError, ValueError):
+                return data
+            if total > 0:
+                awarded = max(0.0, min(awarded, total))
+                data["marks_awarded"] = awarded
+                data["percentage"] = round(awarded / total * 100, 2)
+            for key in ("justification", "remarks"):
+                if data.get(key) is None:
+                    data[key] = ""
+        return data
 
 
 class SubQuestion(BaseModel):
     """Type-safe sub-question structure"""
     id: str = Field(..., description="Sub-question identifier")
     text: str = Field(..., description="Sub-question text")
-    type: str = Field(..., description="Question type")
-    marks: int = Field(..., gt=0, description="Marks for this sub-question")
+    type: str = Field(default="explain", description="Question type")
+    marks: float = Field(default=0, ge=0, description="Marks for this sub-question")
     
-    @field_validator('type')
+    @field_validator('type', mode='before')
     @classmethod
-    def validate_type(cls, v: str) -> str:
-        valid_types = {'explain', 'define', 'short', 'long', 'calculate', 'analyze'}
-        if v not in valid_types:
-            raise ValueError(f"Question type must be one of {valid_types}")
-        return v
+    def validate_type(cls, v: Any) -> str:
+        return normalize_question_type(v)
 
 
 class ParsedQuestion(BaseModel):
     """Type-safe parsed question structure"""
     id: str = Field(..., description="Question identifier")
     text: str = Field(..., description="Question text")
-    type: str = Field(..., description="Question type")
-    marks: int = Field(..., gt=0, description="Marks for this question")
+    type: str = Field(default="explain", description="Question type")
+    marks: float = Field(default=0, ge=0, description="Marks for this question")
     sub_questions: List[SubQuestion] = Field(default_factory=list, description="Sub-questions")
     
-    @field_validator('type')
+    @field_validator('type', mode='before')
     @classmethod
-    def validate_type(cls, v: str) -> str:
-        valid_types = {'explain', 'define', 'short', 'long', 'calculate', 'analyze'}
-        if v not in valid_types:
-            raise ValueError(f"Question type must be one of {valid_types}")
-        return v
+    def validate_type(cls, v: Any) -> str:
+        return normalize_question_type(v)
 
 
 class QuestionParseResult(BaseModel):
     """Type-safe question parsing result"""
-    questions: List[ParsedQuestion] = Field(..., description="Parsed questions")
-    total_marks: int = Field(..., gt=0, description="Total marks for all questions")
-    question_count: int = Field(..., gt=0, description="Number of questions")
+    questions: List[ParsedQuestion] = Field(..., min_length=1, description="Parsed questions")
+    total_marks: float = Field(..., gt=0, description="Total marks for all questions")
+    question_count: int = Field(default=0, ge=0, description="Number of questions")
     
-    @field_validator('question_count')
-    @classmethod
-    def validate_question_count(cls, v: int, info: ValidationInfo) -> int:
-        if hasattr(info, 'data') and info.data and 'questions' in info.data:
-            questions = info.data['questions']
-            if isinstance(questions, list) and v != len(questions):
-                raise ValueError("Question count must match actual number of questions")
-        return v
+    @model_validator(mode="after")
+    def sync_question_count(self) -> "QuestionParseResult":
+        # The count is derived, so trust the actual list over the model's arithmetic
+        self.question_count = len(self.questions)
+        return self
 
 
 class LLMManager:
     """Manages LLM interactions with support for multiple providers"""
     
     def __init__(self) -> None:
-        self.default_model: str = os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo")
+        self.default_model: str = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
         self.default_temperature: float = float(os.getenv("DEFAULT_TEMPERATURE", "0.3"))
         self.default_max_tokens: int = int(os.getenv("DEFAULT_MAX_TOKENS", "2000"))
         
@@ -113,6 +145,8 @@ class LLMManager:
         gemini_key = os.getenv("GEMINI_API_KEY")
         if gemini_key:
             os.environ["GEMINI_API_KEY"] = gemini_key
+        
+        self.ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     
     def get_completion(
         self,
@@ -124,11 +158,15 @@ class LLMManager:
     ) -> str:
         """Get completion from specified LLM model"""
         
+        model_name = model or self.default_model
+        if model_name.startswith(("ollama/", "ollama_chat/")):
+            kwargs.setdefault("api_base", self.ollama_base_url)
+        
         try:
             response = completion(
-                model=model or self.default_model,
+                model=model_name,
                 messages=messages,
-                temperature=temperature or self.default_temperature,
+                temperature=self.default_temperature if temperature is None else temperature,
                 max_tokens=max_tokens or self.default_max_tokens,
                 **kwargs
             )
@@ -151,7 +189,7 @@ class LLMManager:
         question: str,
         student_answer: str,
         reference_answer: Optional[str] = None,
-        marks: int = 10,
+        marks: float = 10,
         question_type: str = "explain",
         model: Optional[str] = None
     ) -> EvaluationResult:
@@ -202,7 +240,9 @@ Respond in the following JSON format:
             response = self.get_completion(messages, model=model)
             
             # Parse JSON response
-            result_dict = json.loads(response)
+            result_dict = extract_json(response)
+            # The question's marks are authoritative, not what the model echoes back
+            result_dict["total_marks"] = marks
             
             # Validate and convert to Pydantic model
             result = EvaluationResult(**result_dict)
@@ -220,9 +260,9 @@ Respond in the following JSON format:
     def parse_questions_from_text(
         self,
         question_text: str,
-        total_marks: int,
+        total_marks: float,
         mark_distribution: str,
-        per_question_marks: Optional[int] = None,
+        per_question_marks: Optional[float] = None,
         model: Optional[str] = None
     ) -> QuestionParseResult:
         """Parse questions from uploaded question bank text"""
@@ -278,7 +318,13 @@ Respond in the following JSON format:
             response = self.get_completion(messages, model=model)
             
             # Parse JSON response
-            result_dict = json.loads(response)
+            result_dict = extract_json(response)
+            result_dict.setdefault("total_marks", total_marks)
+            
+            # With uniform distribution every main question carries the same marks
+            if mark_distribution == "uniform" and per_question_marks:
+                for question in result_dict.get("questions", []):
+                    question["marks"] = per_question_marks
             
             # Validate and convert to Pydantic model
             result = QuestionParseResult(**result_dict)

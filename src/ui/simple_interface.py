@@ -3,11 +3,11 @@ Simple Gradio interface for TAES 2
 A streamlined interface for quick evaluations without complex features
 """
 
+import html
 import gradio as gr
 from typing import Optional, List
-from src.database.models import QuestionBank
-from src.database.init_db import get_db
 from src.evaluation.engine import evaluation_engine
+from src.ui.common import MODEL_CHOICES, DEFAULT_MODEL, read_upload, refresh_question_banks_update
 
 
 def create_simple_interface():
@@ -47,7 +47,7 @@ def create_simple_interface():
                 with gr.Group():
                     answer_file = gr.File(
                         label="📄 Answer Sheet",
-                        file_types=[".pdf", ".docx"],
+                        file_types=[".pdf", ".docx", ".txt"],
                         file_count="single"
                     )
                 
@@ -55,13 +55,8 @@ def create_simple_interface():
                 with gr.Group():
                     model_selection = gr.Dropdown(
                         label="🤖 AI Model",
-                        choices=[
-                            ("GPT-3.5 Turbo (Fast)", "gpt-3.5-turbo"),
-                            ("GPT-4 (Accurate)", "gpt-4"),
-                            ("Claude 3 Haiku (Balanced)", "claude-3-haiku"),
-                            ("Gemini Pro (Google)", "gemini-pro")
-                        ],
-                        value="gpt-3.5-turbo",
+                        choices=MODEL_CHOICES,
+                        value=DEFAULT_MODEL,
                         info="Choose the AI model for evaluation"
                     )
                 
@@ -116,28 +111,14 @@ def create_simple_interface():
                             precision=0
                         )
                         avg_score_per_question = gr.Number(
-                            label="Avg Score/Question",
+                            label="Avg Score/Question (%)",
                             interactive=False,
                             precision=1
                         )
         
         def refresh_question_banks():
             """Refresh the question banks dropdown"""
-            db = None
-            try:
-                db = next(get_db())
-                question_banks = db.query(QuestionBank).all()
-                if not question_banks:
-                    return gr.update(choices=[], value=None)
-                
-                choices = [(f"{qb.name} ({qb.total_marks} marks)", qb.id) for qb in question_banks]
-                return gr.update(choices=choices, value=choices[0][1] if choices else None)
-            except Exception as e:
-                print(f"Error refreshing question banks: {e}")
-                return gr.update(choices=[], value=None)
-            finally:
-                if db is not None:
-                    db.close()
+            return refresh_question_banks_update("{name} ({total_marks} marks)")
         
         def evaluate_answer_sheet(question_bank_id, file, model):
             """Evaluate the uploaded answer sheet"""
@@ -176,12 +157,11 @@ def create_simple_interface():
                 processing_status = "🔄 Processing answer sheet...\nThis may take a few moments."
                 
                 # Read file content
-                with open(file.name, 'rb') as f:
-                    file_content = f.read()
+                file_content, file_name = read_upload(file)
                 
                 # Process answer sheet
                 result = evaluation_engine.process_single_answer_sheet(
-                    file_content, file.name, question_bank_id, model
+                    file_content, file_name, question_bank_id, model
                 )
                 
                 if result.status == "completed":
@@ -196,7 +176,7 @@ def create_simple_interface():
                             <strong>{result.total_marks_obtained}</strong> out of <strong>{result.total_marks_possible}</strong> marks
                         </div>
                         <div style='font-size: 14px; color: #666; background: white; padding: 8px 16px; border-radius: 20px; display: inline-block;'>
-                            Student: {result.student_name}
+                            Student: {html.escape(result.student_name)}
                         </div>
                     </div>
                     """
@@ -205,7 +185,10 @@ def create_simple_interface():
                     evaluation_results = result.evaluation_results or []
                     total_q = len(evaluation_results)
                     answered_q = len([r for r in evaluation_results if r.get("student_answer", "").strip()])
-                    avg_score = percentage / total_q if total_q > 0 else 0
+                    avg_score = (
+                        sum(r.get("percentage", 0) for r in evaluation_results) / total_q
+                        if total_q > 0 else 0
+                    )
                     
                     status_msg = f"✅ Evaluation completed successfully!\n📋 Student: {result.student_name}\n📊 Processed {total_q} questions\n⏱️ Evaluation finished"
                     
@@ -244,7 +227,7 @@ def create_simple_interface():
                 <div style='text-align: center; padding: 40px; border: 2px solid #f44336; border-radius: 10px; background-color: #ffebee;'>
                     <div style='font-size: 20px; color: #f44336; margin-bottom: 10px;'>⚠️</div>
                     <div style='font-size: 16px; color: #c62828;'>System Error</div>
-                    <div style='font-size: 12px; color: #999; margin-top: 10px;'>{str(e)[:100]}...</div>
+                    <div style='font-size: 12px; color: #999; margin-top: 10px;'>{html.escape(str(e)[:100])}...</div>
                 </div>
                 """
                 

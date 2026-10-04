@@ -49,20 +49,19 @@ cd TAES2
 
 **Option A: Docker Setup (Recommended)**
 ```bash
-# Start the application with Docker
-docker-compose up -d
+cp .env.example .env      # then add an LLM API key and a POSTGRES_PASSWORD
+docker compose up -d --build
 
 # View logs
-docker-compose logs -f app
+docker compose logs -f app
 
 # Access the application at http://localhost:7860
 ```
 
 **Option B: Manual Setup**
 ```bash
-# Run the setup script
-chmod +x setup.sh
-./setup.sh
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
 # Or use the convenient startup script
 chmod +x start.sh
@@ -84,18 +83,22 @@ TAES_INTERFACE_MODE=simple
 # Server Configuration
 TAES_SERVER_NAME=0.0.0.0
 TAES_SERVER_PORT=7860
-TAES_DEBUG=true
+TAES_DEBUG=false
 
-# Database Configuration
-DATABASE_URL=postgresql://username:password@localhost:5432/taes2_db
+# Optional login for the web UI
+TAES_AUTH_USERNAME=teacher
+TAES_AUTH_PASSWORD=
+
+# Database Configuration (only needed outside Docker)
+DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@localhost:5432/taes2_db
 
 # LLM Configuration
 OPENAI_API_KEY=your_openai_api_key_here
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 GEMINI_API_KEY=your_gemini_api_key_here
 
-# Default LLM Settings
-DEFAULT_MODEL=gpt-3.5-turbo
+# Default LLM Settings (any LiteLLM model name)
+DEFAULT_MODEL=gpt-4o-mini
 DEFAULT_TEMPERATURE=0.3
 DEFAULT_MAX_TOKENS=2000
 ```
@@ -226,14 +229,14 @@ The included `start.sh` script provides convenient commands for managing the app
 
 ### Common Issues
 
-1. **ASGI Application Errors**
-   - Solution: Use Python directly instead of uvicorn for Gradio 3.26.0
-   - The app now uses Gradio's built-in server for better compatibility
+1. **LLM errors during evaluation**
+   - Check the API key for the provider of the model you picked
+   - Model names follow LiteLLM, e.g. `gpt-4o-mini`, `anthropic/claude-3-5-haiku-latest`, `gemini/gemini-2.0-flash`, `ollama/llama3`
 
 2. **Database Connection Issues**
    - Check your `DATABASE_URL` in `.env`
    - Ensure PostgreSQL is running
-   - For Docker: `docker-compose logs database`
+   - For Docker: `docker compose logs database`
 
 3. **Missing Dependencies**
    - Run: `pip install -r requirements.txt`
@@ -247,8 +250,8 @@ The included `start.sh` script provides convenient commands for managing the app
 ### Log Files
 Check the following locations for detailed error information:
 - Application logs: `logs/` directory
-- Docker logs: `docker-compose logs app`
-- Database logs: `docker-compose logs database`
+- Docker logs: `docker compose logs app`
+- Database logs: `docker compose logs database`
 
 ## Database Management
 
@@ -274,7 +277,6 @@ python db_manage.py backup
 python db_manage.py reset
 ```
 
-For detailed database setup instructions, see [DATABASE_SETUP.md](DATABASE_SETUP.md).
 
 ## Environment Variables
 
@@ -289,6 +291,11 @@ All environment variables are documented in `.env.example`. Key variables includ
 
 ### Database Configuration
 - `DATABASE_URL`: PostgreSQL connection string
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`: alternative to `DATABASE_URL`
+- `DB_CONNECT_RETRIES`: how many times to wait for the database at startup (default 10)
+
+### Access Control
+- `TAES_AUTH_USERNAME` / `TAES_AUTH_PASSWORD`: require a login for the web UI when both are set
 
 ### LLM Configuration  
 - `OPENAI_API_KEY`: OpenAI API key
@@ -296,18 +303,21 @@ All environment variables are documented in `.env.example`. Key variables includ
 - `GEMINI_API_KEY`: Google Gemini API key
 - `OLLAMA_BASE_URL`: Ollama server URL
 - `DEFAULT_MODEL`: Default LLM model to use
+- `MODEL_CHOICES`: Comma separated models offered in the UI
 - `DEFAULT_TEMPERATURE`: Default temperature setting
 - `DEFAULT_MAX_TOKENS`: Default maximum tokens
 
 ## LLM Provider Support
 
+Any model [LiteLLM](https://docs.litellm.ai/docs/providers) supports works; set the list shown in the UI with `MODEL_CHOICES`.
+
 ### Cloud Providers
-- **OpenAI**: GPT-3.5, GPT-4, GPT-4 Turbo
-- **Anthropic**: Claude 3 Sonnet, Claude 3 Haiku
-- **Google**: Gemini Pro
+- **OpenAI**: e.g. `gpt-4o-mini`, `gpt-4o`
+- **Anthropic**: e.g. `anthropic/claude-3-5-haiku-latest`
+- **Google**: e.g. `gemini/gemini-2.0-flash`
 
 ### Local Models
-- **Ollama**: Llama 2, Mistral, and other supported models
+- **Ollama**: e.g. `ollama/llama3`, `ollama/mistral` (server at `OLLAMA_BASE_URL`)
 
 ## Project Structure
 
@@ -315,12 +325,12 @@ All environment variables are documented in `.env.example`. Key variables includ
 TAES2/
 ├── app.py                          # Main application entry point
 ├── start.sh                       # Convenient startup script
-├── test_app.py                    # Application test suite
-├── requirements.txt                # Python dependencies
-├── docker-compose.yml             # Docker configuration
-├── DockerFile.taes                # Application Docker image
-├── DockerFile.database            # Database Docker image
+├── requirements.txt               # Python dependencies
+├── requirements-dev.txt           # Test dependencies
+├── docker-compose.yml             # Local Docker stack (app + Postgres)
+├── Dockerfile                     # Application Docker image
 ├── .env.example                   # Environment variables template
+├── tests/                         # Pytest suite
 ├── src/
 │   ├── config/
 │   │   └── settings.py            # Application configuration
@@ -337,6 +347,7 @@ TAES2/
 │   │   ├── main_interface.py      # Full-featured Gradio interface
 │   │   ├── simple_interface.py    # User-friendly interface
 │   │   ├── minimal_interface.py   # Basic interface
+│   │   ├── common.py              # Shared UI helpers
 │   │   └── __init__.py            # UI package exports
 │   ├── schemas/
 │   │   └── models.py              # Pydantic schemas
@@ -346,44 +357,50 @@ TAES2/
 │       └── test_data.py           # Test data generation
 ├── logs/                          # Application logs
 ├── uploads/                       # Uploaded files
-├── data/                          # Data storage
-└── postgres_data/                 # Docker PostgreSQL data
+└── data/                          # Data storage
 ```
 
 ## Supported File Formats
 
 - **Question Papers**: PDF, DOCX, TXT
-- **Answer Sheets**: PDF, DOCX
+- **Answer Sheets**: PDF, DOCX, TXT
+
+Scanned (image only) PDFs and legacy `.doc` files are not supported.
 
 ## Docker Deployment
 
 The application includes a complete Docker setup with PostgreSQL database:
 
 ```bash
-# Start all services
-docker-compose up -d
+cp .env.example .env            # set POSTGRES_PASSWORD and an LLM key
+
+# Build and start all services
+docker compose up -d --build
 
 # View application logs
-docker-compose logs -f app
-
-# View database logs  
-docker-compose logs -f database
+docker compose logs -f app
 
 # Stop all services
-docker-compose down
+docker compose down
 
 # Stop and remove volumes (WARNING: Deletes data)
-docker-compose down --volumes
+docker compose down --volumes
 ```
 
 ### Docker Services
 - **app**: Main TAES 2 application (port 7860)
-- **database**: PostgreSQL database (port 5432)
-- **pgadmin**: Database administration interface (port 8080) - optional
+- **database**: PostgreSQL 16 (port 5432, bound to localhost only)
+- **pgadmin**: Database administration interface (port 8080), optional: `docker compose --profile admin up -d`
 
-Access points:
-- **Application**: http://localhost:7860
-- **Database Admin**: http://localhost:8080 (admin@example.com / admin123)
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q tests
+
+# Against PostgreSQL instead of SQLite
+TEST_DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@localhost:5432/taes2_db pytest -q tests
+```
 
 ## Database Schema
 
@@ -407,7 +424,7 @@ The system uses [LiteLLM](https://github.com/BerriAI/litellm) for unified LLM in
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU GPL v3 - see the [LICENSE](LICENSE) file for details.
 
 ## Support
 

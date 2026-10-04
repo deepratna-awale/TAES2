@@ -10,6 +10,7 @@ from src.database.init_db import get_db
 from src.llm.manager import llm_manager
 from src.evaluation.engine import evaluation_engine
 from src.parsing.document_parser import document_parser
+from src.ui.common import MODEL_CHOICES, DEFAULT_MODEL, read_upload, refresh_question_banks_update
 
 def create_main_interface():
     """Create the main Gradio interface"""
@@ -80,17 +81,8 @@ def create_main_interface():
                 with gr.Row():
                     model_selection = gr.Dropdown(
                         label="LLM Model",
-                        choices=[
-                            "gpt-3.5-turbo",
-                            "gpt-4",
-                            "gpt-4-turbo",
-                            "claude-3-sonnet",
-                            "claude-3-haiku",
-                            "gemini-pro",
-                            "ollama/llama2",
-                            "ollama/mistral"
-                        ],
-                        value="gpt-3.5-turbo"
+                        choices=MODEL_CHOICES,
+                        value=DEFAULT_MODEL
                     )
                 
                 process_questions_btn = gr.Button("Process Question Bank", variant="primary")
@@ -104,11 +96,12 @@ def create_main_interface():
                     
                     try:
                         # Read file content
-                        with open(file.name, 'rb') as f:
-                            file_content = f.read()
+                        file_content, file_name = read_upload(file)
                         
                         # Parse document
-                        text_content = document_parser.parse_document(file_content, file.name)
+                        text_content = document_parser.parse_document(file_content, file_name)
+                        if not text_content.strip():
+                            return None, "No text could be extracted from the question paper"
                         
                         # Extract questions using LLM
                         questions_data = llm_manager.parse_questions_from_text(
@@ -119,7 +112,7 @@ def create_main_interface():
                             model
                         )
                         
-                        return questions_data, "Questions processed successfully! Review and then save."
+                        return questions_data.model_dump(), "Questions processed successfully! Review and then save."
                         
                     except Exception as e:
                         return None, f"Error processing questions: {str(e)}"
@@ -127,6 +120,8 @@ def create_main_interface():
                 def save_question_bank_to_db(name, description, questions_json, total_marks_val, distribution, per_q_marks):
                     if not questions_json or not name:
                         return "Please process questions first and provide a name"
+                    if isinstance(questions_json, str):
+                        questions_json = json.loads(questions_json)
                     
                     db = None
                     try:
@@ -185,18 +180,7 @@ def create_main_interface():
                 refresh_qb_btn = gr.Button("Refresh Question Banks")
                 
                 def refresh_question_banks():
-                    db = None
-                    try:
-                        db = next(get_db())
-                        question_banks = db.query(QuestionBank).all()
-                        choices = [(f"{qb.name} (ID: {qb.id})", qb.id) for qb in question_banks]
-                        return gr.update(choices=choices)
-                    except Exception as e:
-                        print(f"Error refreshing question banks: {e}")
-                        return gr.update(choices=[])
-                    finally:
-                        if db is not None:
-                            db.close()
+                    return refresh_question_banks_update()
                 
                 refresh_qb_btn.click(
                     refresh_question_banks,
@@ -206,23 +190,14 @@ def create_main_interface():
                 # File upload
                 single_answer_file = gr.File(
                     label="Upload Answer Sheet",
-                    file_types=[".pdf", ".docx"],
+                    file_types=[".pdf", ".docx", ".txt"],
                     file_count="single"
                 )
                 
                 single_model_selection = gr.Dropdown(
                     label="LLM Model",
-                    choices=[
-                        "gpt-3.5-turbo",
-                        "gpt-4",
-                        "gpt-4-turbo",
-                        "claude-3-sonnet",
-                        "claude-3-haiku",
-                        "gemini-pro",
-                        "ollama/llama2",
-                        "ollama/mistral"
-                    ],
-                    value="gpt-3.5-turbo"
+                    choices=MODEL_CHOICES,
+                    value=DEFAULT_MODEL
                 )
                 
                 evaluate_single_btn = gr.Button("Evaluate Answer Sheet", variant="primary")
@@ -235,12 +210,11 @@ def create_main_interface():
                     
                     try:
                         # Read file content
-                        with open(file.name, 'rb') as f:
-                            file_content = f.read()
+                        file_content, file_name = read_upload(file)
                         
                         # Process answer sheet
                         result = evaluation_engine.process_single_answer_sheet(
-                            file_content, file.name, question_bank_id, model
+                            file_content, file_name, question_bank_id, model
                         )
                         
                         if result.status == "completed":
@@ -277,23 +251,14 @@ def create_main_interface():
                 
                 batch_answer_files = gr.File(
                     label="Upload Answer Sheets",
-                    file_types=[".pdf", ".docx"],
+                    file_types=[".pdf", ".docx", ".txt"],
                     file_count="multiple"
                 )
                 
                 batch_model_selection = gr.Dropdown(
                     label="LLM Model",
-                    choices=[
-                        "gpt-3.5-turbo",
-                        "gpt-4",
-                        "gpt-4-turbo",
-                        "claude-3-sonnet",
-                        "claude-3-haiku",
-                        "gemini-pro",
-                        "ollama/llama2",
-                        "ollama/mistral"
-                    ],
-                    value="gpt-3.5-turbo"
+                    choices=MODEL_CHOICES,
+                    value=DEFAULT_MODEL
                 )
                 
                 batch_size_input = gr.Number(
@@ -319,9 +284,7 @@ def create_main_interface():
                         # Prepare file contents
                         file_data = []
                         for file in files:
-                            with open(file.name, 'rb') as f:
-                                file_content = f.read()
-                            file_data.append((file_content, file.name))
+                            file_data.append(read_upload(file))
                         
                         # Process batch
                         results = evaluation_engine.process_batch_answer_sheets(
@@ -416,9 +379,11 @@ def create_main_interface():
                 
                 # Load initial data
                 interface.load(
-                    search_student_results,
-                    inputs=[gr.Textbox(value="", visible=False)],
+                    lambda: search_student_results(""),
                     outputs=[results_display]
                 )
+        
+        interface.load(refresh_question_banks, outputs=[question_bank_dropdown])
+        interface.load(refresh_question_banks, outputs=[batch_question_bank_dropdown])
     
     return interface

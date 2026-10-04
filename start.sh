@@ -92,25 +92,9 @@ run_tests() {
     # Check dependencies
     check_dependencies
     
-    # Run the test script
-    if [ -f "test_app.py" ]; then
-        python3 test_app.py
-    else
-        print_warning "test_app.py not found, running basic import test..."
-        python3 -c "
-import sys
-sys.path.insert(0, '.')
-try:
-    from app import create_gradio_app
-    print('✅ App import successful')
-    interface = create_gradio_app()
-    print('✅ Interface creation successful')
-    print('🎉 Basic tests passed!')
-except Exception as e:
-    print(f'❌ Test failed: {e}')
-    sys.exit(1)
-"
-    fi
+    # Run the test suite
+    pip install -q -r requirements-dev.txt
+    python3 -m pytest -q tests
 }
 
 # Function to start with Docker
@@ -127,26 +111,26 @@ start_docker() {
     
     if [ "$rebuild" = "true" ]; then
         print_status "Rebuilding Docker images..."
-        docker-compose down --volumes --remove-orphans
-        docker-compose build --no-cache
+        docker compose down --volumes --remove-orphans
+        docker compose build --no-cache
     fi
     
     # Start the services
-    docker-compose up -d
+    docker compose up -d
     
     print_success "TAES 2 started with Docker!"
     print_status "Application will be available at: http://localhost:7860"
-    print_status "Database admin (pgAdmin) will be available at: http://localhost:8080"
+    print_status "Database admin: docker compose --profile admin up -d pgadmin (http://localhost:8080)"
     print_status ""
-    print_status "To view logs: docker-compose logs -f app"
-    print_status "To stop: docker-compose down"
+    print_status "To view logs: docker compose logs -f app"
+    print_status "To stop: docker compose down"
 }
 
 # Function to clean up Docker
 clean_docker() {
     print_status "Cleaning up Docker containers and volumes..."
     
-    docker-compose down --volumes --remove-orphans
+    docker compose down --volumes --remove-orphans
     docker system prune -f
     
     print_success "Docker cleanup completed"
